@@ -1,6 +1,6 @@
 /* Service worker : cache des fichiers locaux + des bibliothèques CDN pour le mode hors ligne */
-const CACHE = 'heures-ecole-v2';
-const LOCAL = ['./', './index.html', './styles.css', './app.js', './manifest.json', './icons/icon-192.png', './icons/icon-512.png'];
+const CACHE = 'heures-ecole-v3';
+const LOCAL = ['./', './index.html', './styles.css', './app.js', './manifest.json', './icon-192.png', './icon-512.png'];
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(LOCAL)).then(() => self.skipWaiting()));
 });
