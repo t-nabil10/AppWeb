@@ -8,13 +8,28 @@ const now = new Date();
 let page = 'dashboard', Y = now.getFullYear(), M = now.getMonth(), charts = [];
 
 /* ---------- Données ---------- */
-function load() {
-  try {
-    const d = JSON.parse(localStorage.getItem(KEY));
-    if (d && d.settings && Array.isArray(d.sessions)) return d;
-  } catch (e) { console.warn('Données illisibles', e); }
-  return { settings: { school: 'Mon École', rate: 100, fy: now.getFullYear(), notes: '' }, sessions: [] };
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+/* Convertit l'ancien format (une seule école) vers le format multi-écoles */
+function migrate(d) {
+  if (!d || !Array.isArray(d.sessions)) return null;
+  if (!Array.isArray(d.schools)) {
+    const o = d.settings || {};
+    d.schools = [{ id: 's1', name: o.school || 'Mon École', rate: +o.rate || 100, notes: o.notes || '' }];
+    d.settings = { fy: o.fy || now.getFullYear() };
+  }
+  if (!d.schools.length) d.schools.push({ id: uid(), name: 'Mon École', rate: 100, notes: '' });
+  d.settings = d.settings || { fy: now.getFullYear() };
+  d.sessions.forEach(s => { if (!s.school) s.school = d.schools[0].id; });
+  if (!d.schools.some(s => s.id === d.current)) d.current = d.schools[0].id;
+  return d;
 }
+function load() {
+  try { const d = migrate(JSON.parse(localStorage.getItem(KEY))); if (d) return d; } catch (e) { console.warn('Données illisibles', e); }
+  const id = uid();
+  return { settings: { fy: now.getFullYear() }, schools: [{ id, name: 'Mon École', rate: 100, notes: '' }], current: id, sessions: [] };
+}
+const sch = () => db.schools.find(s => s.id === db.current) || db.schools[0]; // école sélectionnée
+const mine = () => db.sessions.filter(s => s.school === sch().id);          // séances de l'école sélectionnée
 let db = load();
 const save = () => {
   try { localStorage.setItem(KEY, JSON.stringify(db)); } catch (e) { toast('Erreur de sauvegarde'); }
@@ -32,19 +47,19 @@ const inc = s => s.hours * s.rate;
 const fmt = n => n ? n.toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '-';
 const fmtH = n => n ? String(+n.toFixed(2)) : '-';
 const esc = t => String(t ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const byMonth = (y, m) => db.sessions.filter(s => s.date.startsWith(`${y}-${pad(m + 1)}`)).sort((a, b) => a.date.localeCompare(b.date));
+const byMonth = (y, m) => mine().filter(s => s.date.startsWith(`${y}-${pad(m + 1)}`)).sort((a, b) => a.date.localeCompare(b.date));
 const sum = l => ({ h: l.reduce((a, s) => a + s.hours, 0), i: l.reduce((a, s) => a + inc(s), 0), d: l.length });
 const monthTotals = y => MOIS.map((_, m) => sum(byMonth(y, m)));
 const yearOf = s => +s.date.slice(0, 4);
 
 /* ---------- Mutations ---------- */
 function setSession(date, hours, notes, rate) {
-  const i = db.sessions.findIndex(s => s.date === date);
+  const i = db.sessions.findIndex(s => s.school === db.current && s.date === date);
   hours = parseFloat(hours);
   if (!(hours > 0)) { if (i >= 0) db.sessions.splice(i, 1); }
   else if (hours > 24) return toast('Maximum 24 heures par jour');
   else if (i >= 0) { db.sessions[i].hours = hours; if (notes !== undefined) db.sessions[i].notes = notes; if (rate) db.sessions[i].rate = rate; }
-  else db.sessions.push({ date, hours, rate: rate || db.settings.rate, notes: notes || '' }); // taux figé à la saisie
+  else db.sessions.push({ school: db.current, date, hours, rate: rate || sch().rate, notes: notes || '' }); // taux figé à la saisie
   save(); render();
 }
 
@@ -52,7 +67,8 @@ function setSession(date, hours, notes, rate) {
 function render() {
   charts.forEach(c => c.destroy()); charts = [];
   document.querySelectorAll('#nav a').forEach(a => a.classList.toggle('active', a.dataset.p === page));
-  $('#brandName').textContent = db.settings.school;
+  $('#brandName').textContent = sch().name;
+  $('#schoolSel').innerHTML = db.schools.map(s => `<option value="${s.id}" ${s.id === db.current ? 'selected' : ''}>${esc(s.name)}</option>`).join('');
   const ys = new Set([Y, now.getFullYear(), db.settings.fy, ...db.sessions.map(yearOf)]);
   $('#yearSel').innerHTML = [...ys].sort().map(y => `<option ${y === Y ? 'selected' : ''}>${y}</option>`).join('');
   $('#today').textContent = now.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
@@ -61,6 +77,7 @@ function render() {
 }
 function go(p) { page = p; $('#sidebar').classList.remove('open'); render(); }
 $('#nav').onclick = e => { const a = e.target.closest('a'); if (a) go(a.dataset.p); };
+$('#schoolSel').onchange = e => switchSchool(e.target.value);
 $('#yearSel').onchange = e => { Y = +e.target.value; render(); };
 $('#menuBtn').onclick = () => $('#sidebar').classList.toggle('open');
 function moveMonth(d) { M += d; if (M < 0) { M = 11; Y--; } if (M > 11) { M = 0; Y++; } render(); }
@@ -70,8 +87,8 @@ const kpi = (l, v, c = '') => `<div class="col-6 col-lg-4"><div class="cardx kpi
 const recentRows = l => l.map(s => `<tr><td>${s.date.split('-').reverse().join('/')}</td><td>${wd(s.date)}</td><td>${fmtH(s.hours)}</td><td>${fmt(inc(s))} DH</td></tr>`).join('');
 
 function dashboard() {
-  const cur = sum(byMonth(Y, M)), yr = sum(db.sessions.filter(s => yearOf(s) === Y));
-  const recent = [...db.sessions].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 6);
+  const cur = sum(byMonth(Y, M)), yr = sum(mine().filter(s => yearOf(s) === Y));
+  const recent = [...mine()].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 6);
   return `<h4 class="mb-3">Tableau de bord — ${Y}</h4><div class="row g-3 mb-3">
     ${kpi('Revenu du mois (' + MOIS[M] + ')', fmt(cur.i) + ' DH', 'tq')}${kpi('Heures du mois', fmtH(cur.h))}
     ${kpi('Moyenne d\'heures / jour', fmtH(cur.d ? cur.h / cur.d : 0))}${kpi('Jours travaillés', cur.d || '-')}
@@ -84,7 +101,7 @@ function dashboard() {
 function monthly() {
   const l = byMonth(Y, M), t = sum(l), n = dim(Y, M); let rows = '';
   for (let d = 1; d <= n; d++) {
-    const dt = iso(Y, M, d), s = db.sessions.find(x => x.date === dt), w = wd(dt);
+    const dt = iso(Y, M, d), s = mine().find(x => x.date === dt), w = wd(dt);
     rows += `<tr class="${w === 'Dimanche' || w === 'Samedi' ? 'we' : ''}"><td>${pad(d)}</td><td>${w}</td>
       <td><input type="number" min="0" max="24" step="0.25" class="form-control form-control-sm w-auto" value="${s ? s.hours : ''}" onchange="setSession('${dt}',this.value)"></td>
       <td>${s ? fmt(s.rate) : '-'}</td><td>${s ? fmt(inc(s)) : '-'}</td></tr>`;
@@ -109,14 +126,14 @@ function daily() {
     <div class="col-6 col-md-2"><label class="small">Heures</label><input id="nh" type="number" min="0" max="24" step="0.25" class="form-control"></div>
     <div class="col-12 col-md-5"><label class="small">Notes</label><input id="nn" class="form-control"></div>
     <div class="col-12 col-md-2"><button class="btn btn-tq w-100" onclick="addS()">Enregistrer</button></div></div>
-    <small class="text-muted">Une seule séance par date : saisir une date existante met à jour ses heures. Taux appliqué : ${fmt(db.settings.rate)} DH/h.</small></div>
+    <small class="text-muted">Une seule séance par date : saisir une date existante met à jour ses heures. Taux appliqué : ${fmt(sch().rate)} DH/h.</small></div>
     <div class="cardx"><div class="table-responsive"><table class="table table-striped align-middle"><thead><tr><th>Date</th><th>Jour</th><th>Heures</th><th>Taux</th><th>Revenu</th><th>Notes</th><th></th></tr></thead><tbody>${rows || '<tr><td colspan="7" class="text-muted">Aucune séance ce mois-ci.</td></tr>'}</tbody></table></div></div>`;
 }
 function addS() { const h = $('#nh').value; if (!(parseFloat(h) > 0)) return toast('Saisissez un nombre d\'heures valide'); setSession($('#nd').value, h, $('#nn').value); toast('Séance enregistrée'); }
 function delS(d) { if (confirm('Supprimer cette séance ?')) setSession(d, 0); }
 
 function annual() {
-  const t = monthTotals(Y), tot = sum(db.sessions.filter(s => yearOf(s) === Y)), act = t.map((x, i) => ({ ...x, m: i })).filter(x => x.i > 0);
+  const t = monthTotals(Y), tot = sum(mine().filter(s => yearOf(s) === Y)), act = t.map((x, i) => ({ ...x, m: i })).filter(x => x.i > 0);
   const hi = act.length ? act.reduce((a, b) => b.i > a.i ? b : a) : null, lo = act.length ? act.reduce((a, b) => b.i < a.i ? b : a) : null;
   return `<div class="d-flex align-items-center mb-3"><h4 class="m-0">Rapport annuel ${Y}</h4><div class="ms-auto d-flex gap-2"><button class="btn btn-tq btn-sm" onclick="xlsYear()"><i class="fa-solid fa-file-excel"></i> Excel</button><button class="btn btn-gold btn-sm" onclick="pdfYear()"><i class="fa-solid fa-file-pdf"></i> PDF</button></div></div>
     <div class="row g-3 mb-3">${kpi('Revenu annuel', fmt(tot.i) + ' DH', 'gold')}${kpi('Heures annuelles', fmtH(tot.h))}${kpi('Revenu mensuel moyen', fmt(act.length ? tot.i / act.length : 0) + ' DH')}
@@ -127,23 +144,43 @@ function annual() {
 }
 
 function settings() {
-  const s = db.settings;
-  return `<h4 class="mb-3">Paramètres</h4><div class="cardx"><div class="row g-3">
-    <div class="col-md-6"><label>Nom de l'école</label><input id="sn" class="form-control" value="${esc(s.school)}"></div>
+  const s = sch();
+  return `<h4 class="mb-3">Paramètres</h4>
+    <div class="cardx mb-3"><h6>Mes écoles</h6><div class="d-flex flex-wrap gap-2 mb-2">${db.schools.map(x => `<button class="btn btn-sm ${x.id === db.current ? 'btn-tq' : 'btn-outline-secondary'}" onclick="switchSchool('${x.id}')">${esc(x.name)}</button>`).join('')}
+    <button class="btn btn-sm btn-gold" onclick="addSchool()"><i class="fa-solid fa-plus"></i> Ajouter une école</button></div>
+    <small class="text-muted">Chaque école a ses propres séances, son taux horaire et ses rapports. Changez d'école avec la liste en haut de l'écran.</small></div>
+    <div class="cardx"><h6>École sélectionnée</h6><div class="row g-3">
+    <div class="col-md-6"><label>Nom de l'école</label><input id="sn" class="form-control" value="${esc(s.name)}"></div>
     <div class="col-md-3"><label>Taux horaire (DH)</label><input id="sr" type="number" min="0" step="0.5" class="form-control" value="${s.rate}"></div>
-    <div class="col-md-3"><label>Année financière</label><input id="sf" type="number" class="form-control" value="${s.fy}"></div>
+    <div class="col-md-3"><label>Année financière</label><input id="sf" type="number" class="form-control" value="${db.settings.fy}"></div>
     <div class="col-12"><label>Notes</label><textarea id="sx" class="form-control">${esc(s.notes)}</textarea></div>
-    <div class="col-12"><button class="btn btn-tq" onclick="saveSet(false)">Enregistrer</button>
-    <button class="btn btn-gold" onclick="saveSet(true)">Enregistrer et appliquer le taux à toutes les séances passées</button></div></div>
+    <div class="col-12 d-flex gap-2 flex-wrap"><button class="btn btn-tq" onclick="saveSet(false)">Enregistrer</button>
+    <button class="btn btn-gold" onclick="saveSet(true)">Enregistrer et appliquer le taux aux séances passées</button>
+    <button class="btn btn-outline-danger ms-auto" onclick="delSchool()">Supprimer cette école</button></div></div>
     <small class="text-muted d-block mt-2">Par défaut, un nouveau taux ne concerne que les futures séances : l'historique garde son taux d'origine.</small></div>`;
 }
 function saveSet(all) {
   const r = parseFloat($('#sr').value), f = parseInt($('#sf').value);
   if (!(r >= 0) || !(f > 1990)) return toast('Valeurs invalides');
-  if (all && !confirm('Modifier le taux de TOUTES les séances existantes ?')) return;
-  db.settings = { school: $('#sn').value.trim() || 'Mon École', rate: r, fy: f, notes: $('#sx').value };
-  if (all) db.sessions.forEach(s => s.rate = r);
+  if (all && !confirm('Modifier le taux de TOUTES les séances de cette école ?')) return;
+  const s = sch(); s.name = $('#sn').value.trim() || s.name; s.rate = r; s.notes = $('#sx').value; db.settings.fy = f;
+  if (all) mine().forEach(x => x.rate = r);
   save(); render(); toast('Paramètres enregistrés');
+}
+function switchSchool(id) { db.current = id; save(); render(); toast('École : ' + sch().name); }
+function addSchool() {
+  const name = (prompt('Nom de la nouvelle école :') || '').trim(); if (!name) return;
+  const rate = parseFloat(prompt('Taux horaire (DH) :', sch().rate));
+  db.schools.push({ id: uid(), name, rate: rate >= 0 ? rate : 100, notes: '' });
+  db.current = db.schools[db.schools.length - 1].id; save(); render(); toast('École ajoutée : ' + name);
+}
+function delSchool() {
+  if (db.schools.length < 2) return toast('Il faut garder au moins une école');
+  const s = sch(), n = mine().length;
+  if (!confirm(`Supprimer « ${s.name} » et ses ${n} séance(s) ?`)) return;
+  if (n && !confirm('Dernière confirmation : ces séances seront perdues (pensez à une sauvegarde JSON).')) return;
+  db.sessions = db.sessions.filter(x => x.school !== s.id); db.schools = db.schools.filter(x => x.id !== s.id);
+  db.current = db.schools[0].id; save(); render(); toast('École supprimée');
 }
 
 function backup() {
@@ -165,12 +202,13 @@ function exportJSON() {
   a.download = `sauvegarde-heures-${iso(now.getFullYear(), now.getMonth(), now.getDate())}.json`; a.click();
 }
 function mergeData(d) {
-  if (!d || !Array.isArray(d.sessions)) throw new Error('Fichier de sauvegarde invalide');
+  d = migrate(d); if (!d) throw new Error('Fichier de sauvegarde invalide');
   let add = 0, skip = 0;
+  d.schools.forEach(s => { if (!db.schools.some(x => x.id === s.id)) db.schools.push({ id: String(s.id), name: String(s.name || 'École'), rate: +s.rate || 0, notes: String(s.notes || '') }); });
   d.sessions.forEach(s => {
-    const ok = /^\d{4}-\d{2}-\d{2}$/.test(s.date) && s.hours > 0 && s.hours <= 24 && s.rate >= 0;
-    if (!ok || db.sessions.some(x => x.date === s.date)) return skip++; // jamais d'écrasement
-    db.sessions.push({ date: s.date, hours: +s.hours, rate: +s.rate, notes: String(s.notes || '') }); add++;
+    const ok = /^\d{4}-\d{2}-\d{2}$/.test(s.date) && s.hours > 0 && s.hours <= 24 && s.rate >= 0 && db.schools.some(x => x.id === s.school);
+    if (!ok || db.sessions.some(x => x.school === s.school && x.date === s.date)) return skip++; // jamais d'écrasement
+    db.sessions.push({ school: s.school, date: s.date, hours: +s.hours, rate: +s.rate, notes: String(s.notes || '') }); add++;
   });
   save(); render(); toast(`${add} séance(s) ajoutée(s), ${skip} ignorée(s)`);
 }
@@ -230,6 +268,7 @@ function drawCharts() {
 }
 
 /* ---------- Exports ---------- */
+const sl = () => sch().name.replace(/[^\w\u00C0-\u017F]+/g, '-'); // nom d'école utilisable dans un nom de fichier
 function xlsSave(wb, name) { XLSX.writeFile(wb, name); }
 const dash = n => n ? n : '-';
 function xlsMonth() {
@@ -237,18 +276,18 @@ function xlsMonth() {
   const rows = [['Date', 'Jour', 'Heures', 'Taux (DH)', 'Revenu (DH)', 'Notes'], ...l.map(s => [s.date, wd(s.date), s.hours, s.rate, inc(s), s.notes]), ['Total', '', dash(t.h), '', dash(t.i), '']];
   const ws = XLSX.utils.aoa_to_sheet(rows); ws['!cols'] = [{ wch: 12 }, { wch: 12 }, { wch: 10 }, { wch: 12 }, { wch: 14 }, { wch: 30 }];
   Object.keys(ws).forEach(k => { if (k[0] !== '!' && typeof ws[k].v === 'number') ws[k].z = '#,##0.00'; });
-  const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, MOIS[M]); xlsSave(wb, `rapport-${MOIS[M]}-${Y}.xlsx`);
+  const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, MOIS[M]); xlsSave(wb, `rapport-${sl()}-${MOIS[M]}-${Y}.xlsx`);
 }
 function xlsYear() {
-  const t = monthTotals(Y), tot = sum(db.sessions.filter(s => yearOf(s) === Y));
+  const t = monthTotals(Y), tot = sum(mine().filter(s => yearOf(s) === Y));
   const ws = XLSX.utils.aoa_to_sheet([['Mois', 'Jours', 'Heures', 'Revenu (DH)'], ...t.map((x, i) => [MOIS[i], dash(x.d), dash(x.h), dash(x.i)]), ['Total', dash(tot.d), dash(tot.h), dash(tot.i)]]);
-  const det = XLSX.utils.aoa_to_sheet([['Date', 'Jour', 'Heures', 'Taux', 'Revenu', 'Notes'], ...db.sessions.filter(s => yearOf(s) === Y).sort((a, b) => a.date.localeCompare(b.date)).map(s => [s.date, wd(s.date), s.hours, s.rate, inc(s), s.notes])]);
+  const det = XLSX.utils.aoa_to_sheet([['Date', 'Jour', 'Heures', 'Taux', 'Revenu', 'Notes'], ...mine().filter(s => yearOf(s) === Y).sort((a, b) => a.date.localeCompare(b.date)).map(s => [s.date, wd(s.date), s.hours, s.rate, inc(s), s.notes])]);
   ws['!cols'] = det['!cols'] = [{ wch: 14 }, { wch: 12 }, { wch: 12 }, { wch: 14 }, { wch: 14 }, { wch: 30 }];
-  const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Synthèse ' + Y); XLSX.utils.book_append_sheet(wb, det, 'Détails'); xlsSave(wb, `bilan-annuel-${Y}.xlsx`);
+  const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Synthèse ' + Y); XLSX.utils.book_append_sheet(wb, det, 'Détails'); xlsSave(wb, `bilan-annuel-${sl()}-${Y}.xlsx`);
 }
 function pdfDoc(title, period, head, body) {
   const { jsPDF } = window.jspdf, p = new jsPDF();
-  p.setFontSize(16); p.setTextColor(30, 42, 82); p.text(db.settings.school, 14, 18);
+  p.setFontSize(16); p.setTextColor(30, 42, 82); p.text(sch().name, 14, 18);
   p.setFontSize(12); p.text(`${title} — ${period}`, 14, 27);
   p.autoTable({ startY: 34, head: [head], body, headStyles: { fillColor: [30, 42, 82] }, alternateRowStyles: { fillColor: [241, 245, 251] } });
   return p;
@@ -256,12 +295,12 @@ function pdfDoc(title, period, head, body) {
 function pdfMonth() {
   const l = byMonth(Y, M), t = sum(l);
   pdfDoc('Rapport mensuel', `${MOIS[M]} ${Y}`, ['Date', 'Jour', 'Heures', 'Taux', 'Revenu (DH)'],
-    [...l.map(s => [s.date, wd(s.date), fmtH(s.hours), fmt(s.rate), fmt(inc(s))]), ['Total', '', fmtH(t.h), '', fmt(t.i)]]).save(`rapport-${MOIS[M]}-${Y}.pdf`);
+    [...l.map(s => [s.date, wd(s.date), fmtH(s.hours), fmt(s.rate), fmt(inc(s))]), ['Total', '', fmtH(t.h), '', fmt(t.i)]]).save(`rapport-${sl()}-${MOIS[M]}-${Y}.pdf`);
 }
 function pdfYear() {
-  const t = monthTotals(Y), tot = sum(db.sessions.filter(s => yearOf(s) === Y));
+  const t = monthTotals(Y), tot = sum(mine().filter(s => yearOf(s) === Y));
   pdfDoc('Bilan annuel', String(Y), ['Mois', 'Jours', 'Heures', 'Revenu (DH)'],
-    [...t.map((x, i) => [MOIS[i], x.d || '-', fmtH(x.h), fmt(x.i)]), ['Total', tot.d || '-', fmtH(tot.h), fmt(tot.i)]]).save(`bilan-annuel-${Y}.pdf`);
+    [...t.map((x, i) => [MOIS[i], x.d || '-', fmtH(x.h), fmt(x.i)]), ['Total', tot.d || '-', fmtH(tot.h), fmt(tot.i)]]).save(`bilan-annuel-${sl()}-${Y}.pdf`);
 }
 
 /* ---------- Démarrage ---------- */
