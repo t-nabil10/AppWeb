@@ -66,7 +66,7 @@ function setSession(date, hours, notes, rate) {
 /* ---------- Navigation ---------- */
 function render() {
   charts.forEach(c => c.destroy()); charts = [];
-  document.querySelectorAll('#nav a').forEach(a => a.classList.toggle('active', a.dataset.p === page));
+  document.querySelectorAll('#nav a, #bottomBar a').forEach(a => a.classList.toggle('active', a.dataset.p === page));
   $('#brandName').textContent = sch().name;
   $('#schoolSel').innerHTML = db.schools.map(s => `<option value="${s.id}" ${s.id === db.current ? 'selected' : ''}>${esc(s.name)}</option>`).join('');
   const ys = new Set([Y, now.getFullYear(), db.settings.fy, ...db.sessions.map(yearOf)]);
@@ -75,8 +75,9 @@ function render() {
   $('#view').innerHTML = ({ dashboard, monthly, daily, annual, settings, backup })[page]();
   if (page === 'dashboard' || page === 'annual') drawCharts();
 }
-function go(p) { page = p; $('#sidebar').classList.remove('open'); render(); }
+function go(p) { page = p; $('#sidebar').classList.remove('open'); render(); window.scrollTo(0, 0); }
 $('#nav').onclick = e => { const a = e.target.closest('a'); if (a) go(a.dataset.p); };
+$('#bottomBar').onclick = e => { const a = e.target.closest('a'); if (a) go(a.dataset.p); };
 $('#schoolSel').onchange = e => switchSchool(e.target.value);
 $('#yearSel').onchange = e => { Y = +e.target.value; render(); };
 $('#menuBtn').onclick = () => $('#sidebar').classList.toggle('open');
