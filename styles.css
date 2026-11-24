@@ -16,7 +16,7 @@ main{margin-left:250px}
 h4{color:var(--navy);font-weight:600}
 .table{--bs-table-striped-bg:#f1f5fb}
 .table thead th{background:var(--navy);color:#fff;border:0}
-.we{color:#a0a6b8}
+.we,.we td{color:#a0a6b8}
 .btn-tq{background:var(--tq);color:#fff}.btn-tq:hover{background:#0b7684;color:#fff}
 .btn-gold{background:var(--gold);color:#fff}
 #toast{position:fixed;bottom:20px;right:20px;background:var(--navy);color:#fff;padding:12px 20px;border-radius:12px;opacity:0;transition:.3s;pointer-events:none;z-index:99}
