@@ -20,12 +20,12 @@
 <aside id="sidebar">
   <div class="brand"><i class="fa-solid fa-graduation-cap"></i> <span id="brandName">Mon École</span></div>
   <nav id="nav">
-    <a data-p="dashboard"><i class="fa-solid fa-chart-pie"></i> Tableau de bord</a>
-    <a data-p="monthly"><i class="fa-solid fa-calendar-days"></i> Suivi mensuel</a>
-    <a data-p="daily"><i class="fa-solid fa-clock"></i> Heures quotidiennes</a>
-    <a data-p="annual"><i class="fa-solid fa-file-invoice-dollar"></i> Rapports annuels</a>
-    <a data-p="settings"><i class="fa-solid fa-gear"></i> Paramètres</a>
-    <a data-p="backup"><i class="fa-solid fa-database"></i> Sauvegarde</a>
+    <a data-p="dashboard" role="button" tabindex="0" onclick="go('dashboard')"><i class="fa-solid fa-chart-pie"></i> Tableau de bord</a>
+    <a data-p="monthly" role="button" tabindex="0" onclick="go('monthly')"><i class="fa-solid fa-calendar-days"></i> Suivi mensuel</a>
+    <a data-p="daily" role="button" tabindex="0" onclick="go('daily')"><i class="fa-solid fa-clock"></i> Heures quotidiennes</a>
+    <a data-p="annual" role="button" tabindex="0" onclick="go('annual')"><i class="fa-solid fa-file-invoice-dollar"></i> Rapports annuels</a>
+    <a data-p="settings" role="button" tabindex="0" onclick="go('settings')"><i class="fa-solid fa-gear"></i> Paramètres</a>
+    <a data-p="backup" role="button" tabindex="0" onclick="go('backup')"><i class="fa-solid fa-database"></i> Sauvegarde</a>
   </nav>
 </aside>
 <main>
@@ -37,12 +37,12 @@
   <section id="view" class="p-3 p-lg-4"></section>
 </main>
 <nav id="bottomBar">
-  <a data-p="dashboard"><i class="fa-solid fa-chart-pie"></i><span>Accueil</span></a>
-  <a data-p="monthly"><i class="fa-solid fa-calendar-days"></i><span>Mois</span></a>
-  <a data-p="daily"><i class="fa-solid fa-clock"></i><span>Heures</span></a>
-  <a data-p="annual"><i class="fa-solid fa-file-invoice-dollar"></i><span>Bilan</span></a>
-  <a data-p="settings"><i class="fa-solid fa-gear"></i><span>Réglages</span></a>
-  <a data-p="backup"><i class="fa-solid fa-database"></i><span>Données</span></a>
+  <button type="button" data-p="dashboard" onclick="go('dashboard')"><i class="fa-solid fa-chart-pie"></i><span>Accueil</span></button>
+  <button type="button" data-p="monthly" onclick="go('monthly')"><i class="fa-solid fa-calendar-days"></i><span>Mois</span></button>
+  <button type="button" data-p="daily" onclick="go('daily')"><i class="fa-solid fa-clock"></i><span>Heures</span></button>
+  <button type="button" data-p="annual" onclick="go('annual')"><i class="fa-solid fa-file-invoice-dollar"></i><span>Bilan</span></button>
+  <button type="button" data-p="settings" onclick="go('settings')"><i class="fa-solid fa-gear"></i><span>Réglages</span></button>
+  <button type="button" data-p="backup" onclick="go('backup')"><i class="fa-solid fa-database"></i><span>Données</span></button>
 </nav>
 <div id="toast"></div>
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>

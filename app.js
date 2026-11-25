@@ -69,7 +69,7 @@ function setSession(date, hours, notes, rate) {
 /* ---------- Navigation ---------- */
 function render() {
   charts.forEach(c => c.destroy()); charts = [];
-  document.querySelectorAll('#nav a, #bottomBar a').forEach(a => a.classList.toggle('active', a.dataset.p === page));
+  document.querySelectorAll('#nav a, #bottomBar button').forEach(a => a.classList.toggle('active', a.dataset.p === page));
   $('#brandName').textContent = sch().name;
   $('#schoolSel').innerHTML = db.schools.map(s => `<option value="${s.id}" ${s.id === db.current ? 'selected' : ''}>${esc(s.name)}</option>`).join('');
   const ys = new Set([Y, now.getFullYear(), db.settings.fy, ...db.sessions.map(yearOf)]);
@@ -79,8 +79,6 @@ function render() {
   if (page === 'dashboard' || page === 'annual') drawCharts();
 }
 function go(p) { page = p; $('#sidebar').classList.remove('open'); render(); window.scrollTo(0, 0); }
-$('#nav').onclick = e => { const a = e.target.closest('a'); if (a) go(a.dataset.p); };
-$('#bottomBar').onclick = e => { const a = e.target.closest('a'); if (a) go(a.dataset.p); };
 $('#schoolSel').onchange = e => switchSchool(e.target.value);
 $('#yearSel').onchange = e => { Y = +e.target.value; render(); };
 $('#menuBtn').onclick = () => $('#sidebar').classList.toggle('open');
@@ -197,21 +195,30 @@ function delSchool() {
 
 function backup() {
   return `<h4 class="mb-3">Sauvegarde et restauration</h4><div class="row g-3"><div class="col-md-6"><div class="cardx"><h6>Exporter (JSON)</h6><button class="btn btn-tq" onclick="exportJSON()">Télécharger la sauvegarde</button></div></div>
-    <div class="col-md-6"><div class="cardx"><h6>Restaurer (fusion)</h6><input type="file" accept=".json" class="form-control mb-2" onchange="importJSON(this.files[0])"><small class="text-muted">Les dates déjà existantes ne sont jamais écrasées ; seules les nouvelles séances sont ajoutées.</small></div></div>
+    <div class="col-md-6"><div class="cardx"><h6>Restaurer (fusion)</h6><input type="file" class="form-control mb-2" onchange="importJSON(this.files[0]);this.value=''"><small class="text-muted">Les dates déjà existantes ne sont jamais écrasées ; seules les nouvelles séances sont ajoutées.</small></div></div>
     <div class="col-12"><div class="cardx"><h6><i class="fa-brands fa-github"></i> Sauvegarde GitHub</h6><div class="row g-2">
-    <div class="col-md-3"><input id="gho" class="form-control" placeholder="Utilisateur GitHub" value="${esc(gh.owner)}" onchange="ghCfg()"></div>
-    <div class="col-md-3"><input id="ghr" class="form-control" placeholder="Dépôt (privé)" value="${esc(gh.repo)}" onchange="ghCfg()"></div>
-    <div class="col-md-3"><input id="ghp" class="form-control" placeholder="Dossier (sauvegardes)" value="${esc(gh.path)}" onchange="ghCfg()"></div>
-    <div class="col-md-3"><input id="ght" type="password" class="form-control" placeholder="Jeton d'accès" value="${esc(gh.token)}" onchange="ghCfg()"></div>
+    <div class="col-md-3"><input id="gho" autocapitalize="off" autocorrect="off" spellcheck="false" autocomplete="off" class="form-control" placeholder="Utilisateur GitHub" value="${esc(gh.owner)}" onchange="ghCfg()"></div>
+    <div class="col-md-3"><input id="ghr" autocapitalize="off" autocorrect="off" spellcheck="false" autocomplete="off" class="form-control" placeholder="Dépôt (privé)" value="${esc(gh.repo)}" onchange="ghCfg()"></div>
+    <div class="col-md-3"><input id="ghp" autocapitalize="off" autocorrect="off" spellcheck="false" autocomplete="off" class="form-control" placeholder="Dossier (sauvegardes)" value="${esc(gh.path)}" onchange="ghCfg()"></div>
+    <div class="col-md-3"><input id="ght" autocapitalize="off" autocorrect="off" spellcheck="false" autocomplete="off" type="password" class="form-control" placeholder="Jeton d'accès" value="${esc(gh.token)}" onchange="ghCfg()"></div>
     <div class="col-12 d-flex gap-2 flex-wrap align-items-center"><button class="btn btn-tq" onclick="ghCfg();ghPush()">Envoyer vers GitHub</button><button class="btn btn-gold" onclick="ghCfg();ghPull()">Restaurer depuis GitHub</button>
     <label class="ms-2"><input type="checkbox" id="gha" ${gh.auto ? 'checked' : ''} onchange="ghCfg()"> Envoi automatique (1 fichier par jour)</label></div></div>
     <small class="text-muted d-block mt-2">Chaque envoi crée un nouveau fichier daté ; les anciennes sauvegardes ne sont jamais écrasées. Utilisez un dépôt <b>privé</b> et un jeton à portée limitée à ce dépôt (Contents : lecture/écriture). Le jeton reste sur cet appareil et n'est jamais inclus dans la sauvegarde.</small></div></div>
     <div class="col-12"><div class="cardx"><h6 class="text-danger">Zone dangereuse</h6><button class="btn btn-outline-danger" onclick="wipe()">Effacer toutes les données</button></div></div></div>`;
 }
+/* Enregistre un fichier : feuille de partage sur iPhone/iPad (le téléchargement direct n'y marche pas), téléchargement classique ailleurs */
+async function saveBlob(blob, name) {
+  const ios = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  try {
+    const file = new File([blob], name, { type: blob.type });
+    if (ios && navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title: name }); return; }
+  } catch (e) { if (e.name === 'AbortError') return; }
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name;
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
 function exportJSON() {
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([JSON.stringify(db, null, 2)], { type: 'application/json' }));
-  a.download = `sauvegarde-heures-${iso(now.getFullYear(), now.getMonth(), now.getDate())}.json`; a.click();
+  const d = new Date();
+  saveBlob(new Blob([JSON.stringify(db, null, 2)], { type: 'application/json' }), `sauvegarde-heures-${iso(d.getFullYear(), d.getMonth(), d.getDate())}.json`);
 }
 function mergeData(d) {
   d = migrate(d); if (!d) throw new Error('Fichier de sauvegarde invalide');
@@ -239,7 +246,7 @@ function importJSON(f) {
 const GHK = 'suiviHeuresGH'; // config + jeton stockés à part : jamais inclus dans la sauvegarde JSON
 let gh = (() => { try { return JSON.parse(localStorage.getItem(GHK)) || {}; } catch (e) { return {}; } })(), ghTimer;
 function ghCfg() {
-  gh = { ...gh, owner: $('#gho').value.trim(), repo: $('#ghr').value.trim(), path: $('#ghp').value.trim() || 'sauvegardes', token: $('#ght').value.trim(), auto: $('#gha').checked };
+  gh = { ...gh, owner: $('#gho').value.trim(), repo: $('#ghr').value.trim(), path: $('#ghp').value.trim() || 'sauvegardes', token: $('#ght').value.replace(/\s+/g, ''), auto: $('#gha').checked };
   localStorage.setItem(GHK, JSON.stringify(gh));
 }
 async function ghApi(method, body, sub = '') {
@@ -330,7 +337,7 @@ function drawCharts() {
 
 /* ---------- Exports ---------- */
 const sl = () => sch().name.replace(/[^\w\u00C0-\u017F]+/g, '-'); // nom d'école utilisable dans un nom de fichier
-function xlsSave(wb, name) { XLSX.writeFile(wb, name); }
+function xlsSave(wb, name) { saveBlob(new Blob([XLSX.write(wb, { bookType: 'xlsx', type: 'array' })], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), name); }
 const dash = n => n ? n : '-';
 function xlsMonth() {
   const l = byMonth(Y, M), t = sum(l);
@@ -351,7 +358,7 @@ function pdfDoc(title, period, head, body) {
   p.setFontSize(16); p.setTextColor(30, 42, 82); p.text(sch().name, 14, 18);
   p.setFontSize(12); p.text(`${title} — ${period}`, 14, 27);
   p.autoTable({ startY: 34, head: [head], body, headStyles: { fillColor: [30, 42, 82] }, alternateRowStyles: { fillColor: [241, 245, 251] } });
-  return p;
+  return { save: name => saveBlob(p.output('blob'), name) };
 }
 function pdfMonth() {
   const l = byMonth(Y, M), t = sum(l);
@@ -380,5 +387,7 @@ render();
 
 /* ---------- PWA : enregistrement du service worker ---------- */
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
-  window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(e => console.warn('SW non enregistré', e)));
+  const had = !!navigator.serviceWorker.controller; // recharge une seule fois quand une nouvelle version prend la main
+  navigator.serviceWorker.addEventListener('controllerchange', () => { if (had && !window.__reloaded) { window.__reloaded = true; location.reload(); } });
+  window.addEventListener('load', () => navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(r => r.update()).catch(e => console.warn('SW non enregistré', e)));
 }
