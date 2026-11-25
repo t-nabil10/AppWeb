@@ -209,7 +209,9 @@ function backup() {
     <div class="col-md-3"><input id="ghp" autocapitalize="off" autocorrect="off" spellcheck="false" autocomplete="off" class="form-control" placeholder="Dossier (sauvegardes)" value="${esc(gh.path)}" onchange="ghCfg()"></div>
     <div class="col-md-3"><input id="ght" autocapitalize="off" autocorrect="off" spellcheck="false" autocomplete="off" type="password" class="form-control" placeholder="Jeton d'accès" value="${esc(gh.token)}" onchange="ghCfg()"></div>
     <div class="col-12 d-flex gap-2 flex-wrap align-items-center"><button class="btn btn-tq" onclick="ghCfg();ghPush()">Envoyer vers GitHub</button><button class="btn btn-gold" onclick="ghCfg();ghPull()">Restaurer depuis GitHub</button>
-    <label class="ms-2"><input type="checkbox" id="gha" ${gh.auto ? 'checked' : ''} onchange="ghCfg()"> Envoi automatique (1 fichier par jour)</label></div></div>
+    <label class="ms-2"><input type="checkbox" id="gha" ${gh.auto ? 'checked' : ''} onchange="ghCfg()"> Envoi automatique (1 fichier par jour)</label></div>
+    <div class="col-12 d-flex gap-2 flex-wrap align-items-center"><small class="text-muted">Supprimer les sauvegardes de plus de :</small>
+    <button class="btn btn-sm btn-outline-danger" onclick="ghClean(30)">30 jours</button><button class="btn btn-sm btn-outline-danger" onclick="ghClean(60)">60 jours</button><button class="btn btn-sm btn-outline-danger" onclick="ghClean(90)">90 jours</button></div></div>
     <small class="text-muted d-block mt-2">Chaque envoi crée un nouveau fichier daté ; les anciennes sauvegardes ne sont jamais écrasées. Utilisez un dépôt <b>privé</b> et un jeton à portée limitée à ce dépôt (Contents : lecture/écriture). Le jeton reste sur cet appareil et n'est jamais inclus dans la sauvegarde.</small></div></div>
     <div class="col-12"><div class="cardx"><h6 class="text-danger">Zone dangereuse</h6><button class="btn btn-outline-danger" onclick="wipe()">Effacer toutes les données</button></div></div></div>`;
 }
@@ -303,6 +305,23 @@ async function ghPull() {
   } catch (e) { toast('Échec GitHub : ' + e.message); }
 }
 function wipe() { if (confirm('Supprimer définitivement toutes les données ?') && confirm('Dernière confirmation : action irréversible.')) { localStorage.removeItem(KEY); db = load(); render(); } }
+
+/* Supprime sur GitHub les sauvegardes plus vieilles que N jours (la plus récente est toujours conservée) */
+async function ghClean(days) {
+  let n = 0;
+  try {
+    ghCfg();
+    const list = await ghApi('GET');
+    const files = (Array.isArray(list) ? list : []).filter(f => /^sauvegarde-\d{4}-\d{2}-\d{2}.*\.json$/.test(f.name)).sort((a, b) => b.name.localeCompare(a.name));
+    if (!files.length) return toast('Aucune sauvegarde sur GitHub');
+    const limit = new Date(); limit.setHours(0, 0, 0, 0); limit.setDate(limit.getDate() - days);
+    const old = files.slice(1).filter(f => new Date(f.name.slice(11, 21) + 'T00:00:00') < limit);
+    if (!old.length) return toast(`Aucune sauvegarde de plus de ${days} jours à supprimer`);
+    if (!confirm(`Supprimer ${old.length} sauvegarde(s) de plus de ${days} jours sur GitHub ?\n(La plus récente est toujours conservée.)\n\nLes plus anciennes :\n` + old.slice(-5).map(f => f.name).join('\n'))) return;
+    for (const f of old) { await ghApi('DELETE', { message: 'Suppression ' + f.name, sha: f.sha }, '/' + f.name); n++; } // un par un (l'API GitHub n'aime pas les suppressions simultanées)
+    toast(`${n} sauvegarde(s) supprimée(s)`, 5000);
+  } catch (e) { toast(`Échec GitHub après ${n} suppression(s) : ${e.message}`, 6000); }
+}
 
 /* ---------- Jours fériés / absences, emploi du temps, paiements ---------- */
 const offOf = date => db.off.find(o => o.school === db.current && o.date === date);
