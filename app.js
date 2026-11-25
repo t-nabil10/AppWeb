@@ -28,7 +28,7 @@ function migrate(d) {
 function load() {
   try { const d = migrate(JSON.parse(localStorage.getItem(KEY))); if (d) return d; } catch (e) { console.warn('Données illisibles', e); }
   const id = uid();
-  return { settings: { fy: now.getFullYear() }, schools: [{ id, name: 'Mon École', rate: 100, notes: '' }], current: id, sessions: [] };
+  return migrate({ settings: { fy: now.getFullYear() }, schools: [{ id, name: 'Mon École', rate: 100, notes: '' }], current: id, sessions: [] }); // ajoute off / pay
 }
 const sch = () => db.schools.find(s => s.id === db.current) || db.schools[0]; // école sélectionnée
 const mine = () => db.sessions.filter(s => s.school === sch().id);          // séances de l'école sélectionnée
@@ -38,7 +38,7 @@ const save = () => {
   clearTimeout(ghTimer);
   if (gh.auto && gh.synced && gh.token) ghTimer = setTimeout(() => ghPush(true), 5000); // envoi auto 5 s après le dernier changement
 };
-function toast(t) { const el = $('#toast'); el.textContent = t; el.classList.add('show'); setTimeout(() => el.classList.remove('show'), 2500); }
+function toast(t, ms = 2500) { const el = $('#toast'); el.textContent = t; el.classList.add('show'); setTimeout(() => el.classList.remove('show'), ms); }
 
 /* ---------- Utilitaires ---------- */
 const pad = n => String(n).padStart(2, '0');
@@ -222,19 +222,27 @@ function exportJSON() {
 }
 function mergeData(d) {
   d = migrate(d); if (!d) throw new Error('Fichier de sauvegarde invalide');
-  let add = 0, skip = 0;
+  if (!d.sessions.length) return toast('Cette sauvegarde est vide (0 séance) : choisissez un autre fichier', 7000);
+  let add = 0, same = 0, bad = 0; const diff = [];
   d.schools.forEach(s => { if (!db.schools.some(x => x.id === s.id)) db.schools.push({ id: String(s.id), name: String(s.name || 'École'), rate: +s.rate || 0, notes: String(s.notes || ''), sched: s.sched || {} }); });
   d.sessions.forEach(s => {
     const ok = /^\d{4}-\d{2}-\d{2}$/.test(s.date) && s.hours > 0 && s.hours <= 24 && s.rate >= 0 && db.schools.some(x => x.id === s.school);
-    if (!ok || db.sessions.some(x => x.school === s.school && x.date === s.date)) return skip++; // jamais d'écrasement
-    db.sessions.push({ school: s.school, date: s.date, hours: +s.hours, rate: +s.rate, notes: String(s.notes || '') }); add++;
+    if (!ok) return bad++;
+    const cur = db.sessions.find(x => x.school === s.school && x.date === s.date);
+    if (!cur) { db.sessions.push({ school: s.school, date: s.date, hours: +s.hours, rate: +s.rate, notes: String(s.notes || '') }); return add++; }
+    if (cur.hours === +s.hours && cur.rate === +s.rate) same++; else diff.push([cur, s]); // jamais d'écrasement silencieux
   });
+  let upd = 0;
+  if (diff.length && confirm(`${diff.length} séance(s) existent déjà avec des valeurs différentes (heures ou taux).\nLes remplacer par celles de la sauvegarde ?`)) {
+    diff.forEach(([c, s]) => { c.hours = +s.hours; c.rate = +s.rate; c.notes = String(s.notes || ''); }); upd = diff.length;
+  }
   (d.off || []).forEach(o => {
     if (/^\d{4}-\d{2}-\d{2}$/.test(o.date) && ['ferie', 'absent'].includes(o.type) && db.schools.some(x => x.id === o.school) &&
         !db.off.some(x => x.school === o.school && x.date === o.date) && !db.sessions.some(x => x.school === o.school && x.date === o.date)) db.off.push({ school: o.school, date: o.date, type: o.type });
   });
   Object.entries(d.pay || {}).forEach(([k, p]) => { if (!db.pay[k] && p && p.paid) db.pay[k] = { paid: true, date: String(p.date || ''), amount: +p.amount || 0 }; });
-  save(); render(); toast(`${add} séance(s) ajoutée(s), ${skip} ignorée(s)`);
+  save(); render();
+  toast(`${add} ajoutée(s), ${upd} remplacée(s), ${same} déjà présente(s) à l'identique, ${diff.length - upd} conservée(s), ${bad} invalide(s)`, 8000);
 }
 function importJSON(f) {
   if (!f) return; const r = new FileReader();
@@ -262,6 +270,7 @@ async function ghApi(method, body, sub = '') {
    L'envoi automatique crée au plus un fichier par jour (mis à jour dans la journée). */
 async function ghPush(silent) {
   try {
+    if (!db.sessions.length) { if (silent || !confirm('Aucune séance sur cet appareil : la sauvegarde sera vide et pourrait apparaître comme la plus récente. Continuer ?')) return; }
     const d = new Date(), day = iso(d.getFullYear(), d.getMonth(), d.getDate());
     const name = silent ? `sauvegarde-${day}.json` : `sauvegarde-${day}_${pad(d.getHours())}-${pad(d.getMinutes())}-${pad(d.getSeconds())}.json`;
     const cur = silent ? await ghApi('GET', null, '/' + name) : null;
@@ -273,11 +282,11 @@ async function ghPush(silent) {
 async function ghPull() {
   try {
     const list = await ghApi('GET');
-    const files = (Array.isArray(list) ? list : []).map(f => f.name).filter(n => n.endsWith('.json')).sort().reverse().slice(0, 10);
+    const files = (Array.isArray(list) ? list : []).filter(f => f.name.endsWith('.json')).sort((a, b) => b.name.localeCompare(a.name)).slice(0, 10);
     if (!files.length) return toast('Aucune sauvegarde trouvée sur GitHub');
-    const n = parseInt(prompt('Quelle sauvegarde restaurer ? (numéro)\n' + files.map((f, i) => `${i + 1}. ${f}`).join('\n'), '1'));
+    const n = parseInt(prompt('Quelle sauvegarde restaurer ? (numéro)\n(une taille proche de 0 Ko = sauvegarde vide)\n' + files.map((f, i) => `${i + 1}. ${f.name} — ${(f.size / 1024).toFixed(1)} Ko`).join('\n'), '1'));
     if (!(n >= 1 && n <= files.length)) return;
-    const cur = await ghApi('GET', null, '/' + files[n - 1]);
+    const cur = await ghApi('GET', null, '/' + files[n - 1].name);
     mergeData(JSON.parse(decodeURIComponent(escape(atob(cur.content.replace(/\n/g, ''))))));
     gh.synced = true; localStorage.setItem(GHK, JSON.stringify(gh));
   } catch (e) { toast('Échec GitHub : ' + e.message); }
