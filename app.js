@@ -78,7 +78,14 @@ function render() {
   $('#view').innerHTML = ({ dashboard, monthly, daily, annual, settings, backup })[page]();
   if (page === 'dashboard' || page === 'annual') drawCharts();
 }
-function go(p) { page = p; $('#sidebar').classList.remove('open'); render(); window.scrollTo(0, 0); }
+function go(p) {
+  if (document.activeElement && document.activeElement.blur) document.activeElement.blur(); // valide la saisie en cours avant de changer de page
+  page = p; $('#sidebar').classList.remove('open'); render(); window.scrollTo(0, 0);
+}
+/* Android : la barre du bas se cache pendant la saisie (clavier ouvert), sinon elle flotte au-dessus du clavier et masque les champs */
+const isField = e => e.target && /^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName);
+document.addEventListener('focusin', e => { if (isField(e)) document.body.classList.add('kb'); });
+document.addEventListener('focusout', () => setTimeout(() => { if (!document.activeElement || !/^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement.tagName)) document.body.classList.remove('kb'); }, 150));
 $('#schoolSel').onchange = e => switchSchool(e.target.value);
 $('#yearSel').onchange = e => { Y = +e.target.value; render(); };
 $('#menuBtn').onclick = () => $('#sidebar').classList.toggle('open');
@@ -222,8 +229,10 @@ function exportJSON() {
 }
 function mergeData(d) {
   d = migrate(d); if (!d) throw new Error('Fichier de sauvegarde invalide');
-  if (!d.sessions.length) return toast('Cette sauvegarde est vide (0 séance) : choisissez un autre fichier', 7000);
+  if (!d.sessions.length && !d.off.length && !Object.keys(d.pay).length) return toast('Cette sauvegarde est vide (0 séance) : choisissez un autre fichier', 7000);
   let add = 0, same = 0, bad = 0; const diff = [];
+  const s0 = db.schools[0]; // appareil neuf : on remplace l'école vide par défaut par celles de la sauvegarde
+  if (!db.sessions.length && db.schools.length === 1 && s0.name === 'Mon École' && !s0.notes && !Object.keys(s0.sched || {}).length) { db.schools = []; db.current = d.current; }
   d.schools.forEach(s => { if (!db.schools.some(x => x.id === s.id)) db.schools.push({ id: String(s.id), name: String(s.name || 'École'), rate: +s.rate || 0, notes: String(s.notes || ''), sched: s.sched || {} }); });
   d.sessions.forEach(s => {
     const ok = /^\d{4}-\d{2}-\d{2}$/.test(s.date) && s.hours > 0 && s.hours <= 24 && s.rate >= 0 && db.schools.some(x => x.id === s.school);
@@ -241,6 +250,8 @@ function mergeData(d) {
         !db.off.some(x => x.school === o.school && x.date === o.date) && !db.sessions.some(x => x.school === o.school && x.date === o.date)) db.off.push({ school: o.school, date: o.date, type: o.type });
   });
   Object.entries(d.pay || {}).forEach(([k, p]) => { if (!db.pay[k] && p && p.paid) db.pay[k] = { paid: true, date: String(p.date || ''), amount: +p.amount || 0 }; });
+  if (!db.schools.some(s => s.id === db.current)) db.current = db.schools[0].id;
+  if (!mine().length) { const s = db.schools.find(x => db.sessions.some(y => y.school === x.id)); if (s) db.current = s.id; } // affiche l'école qui contient des données
   save(); render();
   toast(`${add} ajoutée(s), ${upd} remplacée(s), ${same} déjà présente(s) à l'identique, ${diff.length - upd} conservée(s), ${bad} invalide(s)`, 8000);
 }

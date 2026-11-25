@@ -47,3 +47,11 @@ h4{color:var(--navy);font-weight:600}
 [data-bs-theme=dark] #bottomBar button.active{color:#2fc4d8}
 [data-bs-theme=dark] .we{color:#7d86a3}
 [data-bs-theme=dark] .table{--bs-table-bg:transparent;--bs-table-striped-bg:rgba(255,255,255,.04)}
+
+/* Barre du bas : stable sur Android (clavier, gestes) */
+@media(max-width:991px){
+  #bottomBar{padding-bottom:max(8px,env(safe-area-inset-bottom,0px));transform:translateZ(0);touch-action:manipulation}
+  #bottomBar button{min-height:52px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  body.kb #bottomBar{display:none}
+  body.kb main{padding-bottom:16px}
+}
