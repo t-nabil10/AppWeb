@@ -33,12 +33,10 @@ function load() {
 const sch = () => db.schools.find(s => s.id === db.current) || db.schools[0]; // école sélectionnée
 const mine = () => db.sessions.filter(s => s.school === sch().id);          // séances de l'école sélectionnée
 let db = load();
-const save = localOnly => {
+const save = () => {
   try { localStorage.setItem(KEY, JSON.stringify(db)); } catch (e) { toast('Erreur de sauvegarde'); }
   clearTimeout(ghTimer);
   if (gh.auto && gh.synced && gh.token) ghTimer = setTimeout(() => ghPush(true), 5000); // envoi auto 5 s après le dernier changement
-  const changed = stampChanges();                  // synchro : repère ce qui a changé
-  if (!localOnly && changed) scheduleSync();
 };
 function toast(t, ms = 2500) { const el = $('#toast'); el.textContent = t; el.classList.add('show'); setTimeout(() => el.classList.remove('show'), ms); }
 
@@ -171,19 +169,46 @@ function settings() {
     <div class="col-md-3"><label>Année financière</label><input id="sf" type="number" class="form-control" value="${db.settings.fy}"></div>
     <div class="col-12"><label>Emploi du temps (heures par jour de la semaine)</label><div class="row g-2">${[1, 2, 3, 4, 5, 6, 0].map(i => `<div class="col-3 col-md"><small>${JOURS[i].slice(0, 3)}</small><input type="number" min="0" max="24" step="0.25" class="form-control form-control-sm sch" data-d="${i}" value="${(s.sched || {})[i] || ''}"></div>`).join('')}</div></div>
     <div class="col-12"><label>Notes</label><textarea id="sx" class="form-control">${esc(s.notes)}</textarea></div>
-    <div class="col-12 d-flex gap-2 flex-wrap"><button class="btn btn-tq" onclick="saveSet(false)">Enregistrer</button>
-    <button class="btn btn-gold" onclick="saveSet(true)">Enregistrer et appliquer le taux aux séances passées</button>
+    <div class="col-12 d-flex gap-2 flex-wrap"><button class="btn btn-tq" onclick="saveSet()">Enregistrer</button>
     <button class="btn btn-outline-danger ms-auto" onclick="delSchool()">Supprimer cette école</button></div></div>
-    <small class="text-muted d-block mt-2">Par défaut, un nouveau taux ne concerne que les futures séances : l'historique garde son taux d'origine.</small></div>`;
+    <small class="text-muted d-block mt-2">Si vous modifiez le taux, l'application vous demande s'il s'applique aussi aux séances déjà enregistrées ou seulement aux nouvelles.</small></div>`;
 }
-function saveSet(all) {
+/* Fenêtre de choix quand le taux change : nouvelles séances seulement / toutes / à partir d'une date */
+function askRate(oldR, newR, n) {
+  return new Promise(resolve => {
+    const el = document.createElement('div'); el.className = 'modal fade'; el.tabIndex = -1;
+    const today = iso(now.getFullYear(), now.getMonth(), now.getDate());
+    el.innerHTML = `<div class="modal-dialog modal-dialog-centered"><div class="modal-content"><div class="modal-body p-4">
+      <h5 class="mb-2">Taux horaire modifié</h5>
+      <p>${oldR} DH → <b>${newR} DH</b> par heure.<br>Cette école a déjà <b>${n}</b> séance(s) enregistrée(s). Que faire ?</p>
+      <div class="d-grid gap-2">
+        <button class="btn btn-tq" data-r="new">Seulement les nouvelles séances<br><small>l'historique garde son ancien taux</small></button>
+        <button class="btn btn-gold" data-r="all">Aussi toutes les séances déjà enregistrées</button>
+        <div class="input-group"><input type="date" id="rfrom" class="form-control" value="${today}"><button class="btn btn-outline-secondary" data-r="from">À partir de cette date</button></div>
+        <button class="btn btn-outline-danger" data-r="cancel">Annuler</button></div></div></div></div>`;
+    document.body.appendChild(el);
+    const modal = new bootstrap.Modal(el, { backdrop: 'static' }); let done = false;
+    el.addEventListener('click', e => {
+      const b = e.target.closest('[data-r]'); if (!b) return;
+      let r = b.dataset.r;
+      if (r === 'from') { const v = el.querySelector('#rfrom').value; if (!v) return; r = 'from:' + v; }
+      done = true; resolve(r); modal.hide();
+    });
+    el.addEventListener('hidden.bs.modal', () => { if (!done) resolve('cancel'); el.remove(); });
+    modal.show();
+  });
+}
+async function saveSet() {
   const r = parseFloat($('#sr').value), f = parseInt($('#sf').value);
   if (!(r >= 0) || !(f > 1990)) return toast('Valeurs invalides');
-  if (all && !confirm('Modifier le taux de TOUTES les séances de cette école ?')) return;
-  const s = sch(); s.name = $('#sn').value.trim() || s.name; s.rate = r; s.notes = $('#sx').value; db.settings.fy = f;
+  const s = sch(), n = mine().length; let mode = 'new';
+  if (r !== s.rate && n) { mode = await askRate(s.rate, r, n); if (mode === 'cancel') return toast('Modification annulée'); }
+  s.name = $('#sn').value.trim() || s.name; s.rate = r; s.notes = $('#sx').value; db.settings.fy = f;
   s.sched = {}; document.querySelectorAll('.sch').forEach(i => { const h = parseFloat(i.value); if (h > 0) s.sched[i.dataset.d] = h; });
-  if (all) mine().forEach(x => x.rate = r);
-  save(); render(); toast('Paramètres enregistrés');
+  let upd = 0;
+  if (mode === 'all') mine().forEach(x => { x.rate = r; upd++; });
+  else if (mode.startsWith('from:')) mine().filter(x => x.date >= mode.slice(5)).forEach(x => { x.rate = r; upd++; });
+  save(); render(); toast(upd ? `Paramètres enregistrés — taux appliqué à ${upd} séance(s)` : 'Paramètres enregistrés', 4000);
 }
 function switchSchool(id) { db.current = id; save(); render(); toast('École : ' + sch().name); }
 function addSchool() {
@@ -212,9 +237,6 @@ function backup() {
     <div class="col-md-3"><input id="ght" autocapitalize="off" autocorrect="off" spellcheck="false" autocomplete="off" type="password" class="form-control" placeholder="Jeton d'accès" value="${esc(gh.token)}" onchange="ghCfg()"></div>
     <div class="col-12 d-flex gap-2 flex-wrap align-items-center"><button class="btn btn-tq" onclick="ghCfg();ghPush()">Envoyer vers GitHub</button><button class="btn btn-gold" onclick="ghCfg();ghPull()">Restaurer depuis GitHub</button>
     <label class="ms-2"><input type="checkbox" id="gha" ${gh.auto ? 'checked' : ''} onchange="ghCfg()"> Envoi automatique (1 fichier par jour)</label></div>
-    <div class="col-12"><hr class="my-1"><label class="fw-semibold"><input type="checkbox" id="ghs" ${gh.sync ? 'checked' : ''} onchange="ghCfg()"> Synchronisation automatique entre appareils</label>
-    <button class="btn btn-sm btn-tq ms-2" onclick="ghCfg();syncNow()">Synchroniser maintenant</button> <small class="text-muted ms-2" id="syncInfo">${syncInfo()}</small>
-    <small class="text-muted d-block mt-1">Sur chaque téléphone : mêmes identifiants GitHub puis cochez cette case. Les modifications faites hors ligne sont envoyées dès le retour d'internet. Si deux appareils modifient la même chose, la dernière modification est conservée.</small></div>
     <div class="col-12 d-flex gap-2 flex-wrap align-items-center"><small class="text-muted">Supprimer les sauvegardes de plus de :</small>
     <button class="btn btn-sm btn-outline-danger" onclick="ghClean(30)">30 jours</button><button class="btn btn-sm btn-outline-danger" onclick="ghClean(60)">60 jours</button><button class="btn btn-sm btn-outline-danger" onclick="ghClean(90)">90 jours</button></div></div>
     <small class="text-muted d-block mt-2">Chaque envoi crée un nouveau fichier daté ; les anciennes sauvegardes ne sont jamais écrasées. Utilisez un dépôt <b>privé</b> et un jeton à portée limitée à ce dépôt (Contents : lecture/écriture). Le jeton reste sur cet appareil et n'est jamais inclus dans la sauvegarde.</small></div></div>
@@ -272,10 +294,8 @@ function importJSON(f) {
 const GHK = 'suiviHeuresGH'; // config + jeton stockés à part : jamais inclus dans la sauvegarde JSON
 let gh = (() => { try { return JSON.parse(localStorage.getItem(GHK)) || {}; } catch (e) { return {}; } })(), ghTimer;
 function ghCfg() {
-  const was = gh.sync;
-  gh = { ...gh, owner: $('#gho').value.trim(), repo: $('#ghr').value.trim(), path: $('#ghp').value.trim() || 'sauvegardes', token: $('#ght').value.replace(/\s+/g, ''), auto: $('#gha').checked, sync: $('#ghs') ? $('#ghs').checked : gh.sync };
+  gh = { ...gh, owner: $('#gho').value.trim(), repo: $('#ghr').value.trim(), path: $('#ghp').value.trim() || 'sauvegardes', token: $('#ght').value.replace(/\s+/g, ''), auto: $('#gha').checked };
   localStorage.setItem(GHK, JSON.stringify(gh));
-  if (gh.sync && !was) syncNow(); else if (!gh.sync) setSync('idle');
 }
 async function ghApi(method, body, sub = '') {
   if (!gh.owner || !gh.repo || !gh.token) throw new Error('configuration incomplète');
@@ -283,7 +303,7 @@ async function ghApi(method, body, sub = '') {
   const r = await fetch(`https://api.github.com/repos/${gh.owner}/${gh.repo}/contents/${folder}${sub}`, {
     method, cache: 'no-store', headers: { Authorization: 'Bearer ' + gh.token, Accept: 'application/vnd.github+json' }, body: body ? JSON.stringify(body) : undefined });
   if (r.status === 404 && method === 'GET') return null;
-  if (!r.ok) { const e = new Error(r.status === 401 || r.status === 403 ? 'jeton refusé (' + r.status + ')' : 'erreur ' + r.status); e.status = r.status; throw e; }
+  if (!r.ok) throw new Error('erreur ' + r.status);
   return r.json();
 }
 /* Chaque envoi manuel crée un NOUVEAU fichier daté : les anciennes sauvegardes restent intactes.
@@ -311,7 +331,7 @@ async function ghPull() {
     gh.synced = true; localStorage.setItem(GHK, JSON.stringify(gh));
   } catch (e) { toast('Échec GitHub : ' + e.message); }
 }
-function wipe() { if (confirm('Supprimer définitivement toutes les données ?') && confirm('Dernière confirmation : action irréversible.')) { localStorage.removeItem(KEY); db = load(); resetMeta(); render(); } }
+function wipe() { if (confirm('Supprimer définitivement toutes les données ?') && confirm('Dernière confirmation : action irréversible.')) { localStorage.removeItem(KEY); db = load(); render(); } }
 
 /* Supprime sur GitHub les sauvegardes plus vieilles que N jours (la plus récente est toujours conservée) */
 async function ghClean(days) {
@@ -373,149 +393,6 @@ function setPay(on) {
   db.pay[k] = { paid: true, date, amount }; save(); render(); toast('Paiement enregistré');
 }
 
-/* ---------- Synchronisation entre appareils (fichier partagé sur GitHub) ----------
-   Vos données ne changent pas de forme : chaque élément (école, séance, jour férié/absence, paiement) est repéré par sa clé
-   (ex. école + date) et reçoit une date de dernière modification, gardée à part (suiviHeuresSyncMeta).
-   Fusion : pour chaque élément, la modification la plus récente gagne ; les suppressions sont propagées.
-   Hors ligne : tout reste sur l'appareil et part au retour d'internet. */
-const SYNC_FILE = '/sync/data.json', SMK = 'suiviHeuresSyncMeta';
-let smeta = null, syncTimer, syncBusy = false, syncAgain = false, syncState = 'idle', pendingRender = false, lastTry = 0, syncLast = +localStorage.getItem('suiviHeuresLastSync') || 0;
-const hhmm = t => { const d = new Date(t); return pad(d.getHours()) + ':' + pad(d.getMinutes()); };
-const enc = o => btoa(unescape(encodeURIComponent(JSON.stringify(o))));
-const dec = c => JSON.parse(decodeURIComponent(escape(atob(c.replace(/\n/g, '')))));
-const saveMeta = () => { try { localStorage.setItem(SMK, JSON.stringify(smeta)); } catch (e) {} };
-const stableSched = o => Object.keys(o || {}).sort().map(k => [k, +o[k]]);
-function records() { // tout ce qui se synchronise, sous forme clé -> valeur
-  const m = new Map(), add = (k, v) => m.set(k, { v, sig: JSON.stringify(v) });
-  db.schools.forEach(x => add('C|' + x.id, { id: x.id, name: x.name, rate: +x.rate || 0, notes: x.notes || '', sched: stableSched(x.sched) }));
-  db.sessions.forEach(x => add('S|' + x.school + '|' + x.date, { school: x.school, date: x.date, hours: +x.hours, rate: +x.rate, notes: x.notes || '' }));
-  db.off.forEach(x => add('O|' + x.school + '|' + x.date, { school: x.school, date: x.date, type: x.type }));
-  Object.entries(db.pay).forEach(([k, x]) => { if (x) add('P|' + k, { paid: !!x.paid, date: x.date || '', amount: +x.amount || 0 }); });
-  return m;
-}
-function initMeta() {
-  if (smeta) return;
-  try { const m = JSON.parse(localStorage.getItem(SMK)); if (m && m.u && m.sig && m.tomb) { smeta = m; return; } } catch (e) {}
-  smeta = { u: {}, sig: {}, tomb: {} }; // état de départ : les données existantes n'ont pas de date (0), la 1re modification leur en donne une
-  records().forEach((r, k) => { smeta.sig[k] = r.sig; smeta.u[k] = 0; });
-  saveMeta();
-}
-function resetMeta() { smeta = null; try { localStorage.removeItem(SMK); } catch (e) {} initMeta(); }
-function stampChanges() { // compare les données à l'état connu : date les éléments modifiés, note les suppressions
-  initMeta();
-  const cur = records(), t = Date.now(); let ch = false;
-  cur.forEach((r, k) => { if (smeta.sig[k] !== r.sig) { smeta.sig[k] = r.sig; smeta.u[k] = t; delete smeta.tomb[k]; ch = true; } });
-  Object.keys(smeta.sig).forEach(k => { if (!cur.has(k)) { delete smeta.sig[k]; delete smeta.u[k]; smeta.tomb[k] = t; ch = true; } });
-  if (ch) saveMeta();
-  return ch;
-}
-function snapshot() { const rec = {}; records().forEach((r, k) => { rec[k] = { u: smeta.u[k] || 0, v: r.v }; }); return { v: 2, rec, tomb: { ...smeta.tomb } }; }
-const canonS = x => JSON.stringify([Object.keys(x.rec || {}).sort().map(k => [k, +x.rec[k].u || 0, JSON.stringify(x.rec[k].v)]), Object.keys(x.tomb || {}).sort().map(k => [k, x.tomb[k]])]);
-function validRemote(k, v) {
-  if (!v || typeof v !== 'object') return false;
-  const date = /^\d{4}-\d{2}-\d{2}$/;
-  if (k[0] === 'C') return k === 'C|' + v.id && typeof v.name === 'string';
-  if (k[0] === 'S') return date.test(v.date) && k === 'S|' + v.school + '|' + v.date && v.hours > 0 && v.hours <= 24 && v.rate >= 0;
-  if (k[0] === 'O') return date.test(v.date) && k === 'O|' + v.school + '|' + v.date && (v.type === 'ferie' || v.type === 'absent');
-  if (k[0] === 'P') return /^P\|.+\|\d{4}-\d{2}$/.test(k) && typeof v.paid === 'boolean';
-  return false;
-}
-function mergeSync(r) {
-  initMeta();
-  const loc = records(), R = {}, tomb = { ...((r && r.tomb) || {}) };
-  Object.keys((r && r.rec) || {}).forEach(k => { const e = r.rec[k]; if (e && validRemote(k, e.v)) R[k] = { u: +e.u || 0, v: e.v, sig: JSON.stringify(e.v) }; });
-  // appareil neuf : son école par défaut (jamais utilisée) est remplacée par celles du serveur
-  const s0 = db.schools[0];
-  if (db.schools.length === 1 && !db.sessions.length && !db.off.length && !Object.keys(db.pay).length && s0.name === 'Mon École' && !s0.notes
-      && !Object.keys(s0.sched || {}).length && !(smeta.u['C|' + s0.id] > 0) && Object.keys(R).some(k => k[0] === 'C')) loc.delete('C|' + s0.id);
-  Object.keys(smeta.tomb).forEach(k => { tomb[k] = Math.max(+tomb[k] || 0, smeta.tomb[k]); });
-  const out = new Map();
-  new Set([...loc.keys(), ...Object.keys(R)]).forEach(k => {
-    const l = loc.get(k), x = R[k], lu = l ? (smeta.u[k] || 0) : 0;
-    const w = l && x ? ((lu > x.u || (lu === x.u && l.sig >= x.sig)) ? { u: lu, v: l.v, sig: l.sig } : x) : l ? { u: lu, v: l.v, sig: l.sig } : x;
-    if (w && !(k in tomb && tomb[k] >= w.u)) out.set(k, w); // supprimé plus récemment ailleurs : on le retire
-  });
-  const schoolOf = k => k[0] === 'P' ? k.slice(2, k.lastIndexOf('|')) : out.get(k).v.school;
-  [...out.keys()].filter(k => k[0] !== 'C' && !out.has('C|' + schoolOf(k))).forEach(k => out.delete(k)); // éléments d'une école supprimée
-  [...out.keys()].filter(k => k[0] === 'S').forEach(k => { // séance et férié/absence le même jour : le plus récent gagne
-    const ok = 'O|' + k.slice(2);
-    if (out.has(ok)) { if (out.get(ok).u > out.get(k).u) out.delete(k); else out.delete(ok); }
-  });
-  const yr = Date.now() - 365 * 864e5;
-  Object.keys(tomb).forEach(k => { if (out.has(k) || tomb[k] < yr) delete tomb[k]; });
-  // application aux données
-  const prev = Object.fromEntries(db.schools.map(x => ['C|' + x.id, x]));
-  const order = db.schools.map(x => 'C|' + x.id), sk = [...out.keys()].filter(k => k[0] === 'C');
-  sk.sort((a, b) => { const ia = order.indexOf(a), ib = order.indexOf(b); return (ia < 0 ? 1e9 : ia) - (ib < 0 ? 1e9 : ib) || (a < b ? -1 : 1); });
-  db.schools = sk.map(k => { const v = out.get(k).v; return { ...(prev[k] || {}), id: v.id, name: v.name, rate: v.rate, notes: v.notes, sched: Object.fromEntries(v.sched || []) }; });
-  const of = t => [...out].filter(([k]) => k[0] === t);
-  db.sessions = of('S').map(([, w]) => ({ school: w.v.school, date: w.v.date, hours: w.v.hours, rate: w.v.rate, notes: w.v.notes || '' }));
-  db.off = of('O').map(([, w]) => ({ school: w.v.school, date: w.v.date, type: w.v.type }));
-  db.pay = {}; of('P').forEach(([k, w]) => { db.pay[k.slice(2)] = { paid: w.v.paid, date: w.v.date, amount: w.v.amount }; });
-  if (!db.schools.length) { const id = uid(); db.schools = [{ id, name: 'Mon École', rate: 100, notes: '' }]; }
-  if (!db.schools.some(x => x.id === db.current)) db.current = db.schools[0].id;
-  smeta = { u: {}, sig: {}, tomb };
-  records().forEach((rec, k) => { smeta.sig[k] = rec.sig; smeta.u[k] = out.has(k) ? out.get(k).u : 0; });
-  saveMeta();
-}
-function syncInfo() {
-  if (!gh.sync) return 'Désactivée';
-  return ({ sync: 'Synchronisation…', pending: 'Modifications en attente…', offline: 'Hors ligne : envoi dès le retour d\'internet', error: 'Échec, nouvel essai automatique' }[syncState])
-    || (syncLast ? 'Dernière synchro à ' + hhmm(syncLast) : 'Pas encore synchronisé');
-}
-function setSync(st) {
-  syncState = st;
-  const info = $('#syncInfo'); if (info) info.textContent = syncInfo();
-  let b = $('#syncBadge');
-  if (!gh.sync) { if (b) b.style.display = 'none'; return; }
-  if (!b) {
-    const bar = $('.topbar'); if (!bar) return;
-    b = document.createElement('span'); b.id = 'syncBadge'; b.style.cursor = 'pointer'; b.onclick = () => syncNow();
-    bar.insertBefore(b, bar.querySelector('.ms-auto'));
-  }
-  const m = { sync: ['fa-rotate fa-spin', 'bg-info', 'Synchro…'], pending: ['fa-cloud-arrow-up', 'bg-warning text-dark', 'En attente'], offline: ['fa-cloud-arrow-up', 'bg-warning text-dark', 'Hors ligne'], error: ['fa-triangle-exclamation', 'bg-danger', 'Erreur'] }[st]
-    || ['fa-circle-check', 'bg-success', syncLast ? hhmm(syncLast) : 'OK'];
-  b.style.display = ''; b.className = 'badge rounded-pill ' + m[1]; b.title = syncInfo();
-  b.innerHTML = `<i class="fa-solid ${m[0]}"></i> <span class="d-none d-sm-inline">${m[2]}</span>`;
-}
-function scheduleSync(delay = 2500) {
-  if (!gh.sync || !gh.token) return;
-  clearTimeout(syncTimer); setSync(navigator.onLine === false ? 'offline' : 'pending');
-  syncTimer = setTimeout(() => syncNow(true), delay);
-}
-const typing = () => { const a = document.activeElement; return !!(a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName) && $('#view').contains(a)); };
-function softRender() { if (typing()) pendingRender = true; else render(); } // ne coupe pas une saisie en cours
-async function syncNow(silent) {
-  if (!gh.sync || !gh.owner || !gh.repo || !gh.token) { if (!silent) toast('Cochez la synchronisation et remplissez les identifiants GitHub'); return; }
-  if (syncBusy) { syncAgain = true; return; }
-  clearTimeout(syncTimer);
-  if (navigator.onLine === false) return setSync('offline');
-  syncBusy = true; setSync('sync');
-  try {
-    let done = false, changed = false;
-    const view = () => JSON.stringify([db.schools, db.sessions, db.off, db.pay]);
-    for (let i = 0; i < 3 && !done; i++) {
-      const cur = await ghApi('GET', null, SYNC_FILE);
-      let remote = null;
-      if (cur) { if (!cur.content) throw new Error('fichier de synchronisation trop volumineux'); remote = dec(cur.content); }
-      if (remote) { const before = view(); mergeSync(remote); if (view() !== before) { changed = true; try { localStorage.setItem(KEY, JSON.stringify(db)); } catch (e) {} } }
-      initMeta();
-      const snap = snapshot();
-      if (remote && canonS(snap) === canonS(remote)) { done = true; break; } // rien à envoyer
-      try { await ghApi('PUT', { message: 'sync ' + new Date().toISOString(), content: enc(snap), sha: cur ? cur.sha : undefined }, SYNC_FILE); done = true; }
-      catch (e) { if (e.status === 409 || e.status === 422) continue; throw e; } // un autre appareil a écrit entre-temps : on refusionne
-    }
-    if (!done) throw Object.assign(new Error('conflit, nouvel essai plus tard'), { status: 409 });
-    syncLast = Date.now(); localStorage.setItem('suiviHeuresLastSync', syncLast);
-    setSync('ok'); if (changed) softRender();
-    if (!silent) toast('Synchronisation terminée');
-  } catch (e) {
-    setSync(e.status ? 'error' : 'offline'); console.warn('Synchro', e);
-    if (!silent) toast('Synchronisation : ' + (e.status ? e.message : 'pas de connexion'));
-  } finally { syncBusy = false; if (syncAgain) { syncAgain = false; scheduleSync(1000); } }
-}
-const autoSync = () => { if (gh.sync && Date.now() - lastTry > 10000) { lastTry = Date.now(); syncNow(true); } };
-
 /* ---------- Graphiques ---------- */
 function drawCharts() {
   Chart.defaults.color = dark ? '#cbd3ea' : '#22262E'; Chart.defaults.borderColor = dark ? 'rgba(255,255,255,.12)' : 'rgba(0,0,0,.1)';
@@ -572,13 +449,7 @@ $('#themeBtn').onclick = () => { dark = !dark; localStorage.setItem(THK, dark ? 
 applyTheme();
 
 /* ---------- Démarrage ---------- */
-initMeta(); // état de départ de la synchro (avant toute modification)
 render();
-document.addEventListener('focusout', () => { if (pendingRender) setTimeout(() => { if (pendingRender && !typing()) { pendingRender = false; render(); } }, 300); });
-document.addEventListener('visibilitychange', () => { if (!document.hidden) autoSync(); }); // retour dans l'app
-window.addEventListener('online', () => { lastTry = 0; autoSync(); });                          // retour d'internet
-setInterval(() => { if (!document.hidden) autoSync(); }, 60000);                               // vérification toutes les minutes
-if (gh.sync) { lastTry = Date.now(); syncNow(true); }
 
 /* ---------- PWA : enregistrement du service worker ---------- */
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
