@@ -50,6 +50,7 @@ const wd = s => JOURS[new Date(s + 'T00:00:00').getDay()];
 const inc = s => s.hours * s.rate;
 const fmt = n => n ? n.toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '-';
 const fmtH = n => n ? String(+n.toFixed(2)) : '-';
+const fmtP = n => fmt(n).replace(/[\u202f\u00a0]/g, ' '); // pour les PDF : la police de jsPDF ne sait pas écrire l'espace spécial entre les milliers
 const esc = t => String(t ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const byMonth = (y, m) => mine().filter(s => s.date.startsWith(`${y}-${pad(m + 1)}`)).sort((a, b) => a.date.localeCompare(b.date));
 const sum = l => ({ h: l.reduce((a, s) => a + s.hours, 0), i: l.reduce((a, s) => a + inc(s), 0), d: l.length });
@@ -567,22 +568,55 @@ function xlsYear() {
   ws['!cols'] = det['!cols'] = [{ wch: 14 }, { wch: 12 }, { wch: 12 }, { wch: 14 }, { wch: 14 }, { wch: 30 }];
   const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Synthèse ' + Y); XLSX.utils.book_append_sheet(wb, det, 'Détails'); xlsSave(wb, `bilan-annuel-${sl()}-${Y}.xlsx`);
 }
-function pdfDoc(title, period, head, body) {
-  const { jsPDF } = window.jspdf, p = new jsPDF();
-  p.setFontSize(16); p.setTextColor(30, 42, 82); p.text(sch().name, 14, 18);
-  p.setFontSize(12); p.text(`${title} — ${period}`, 14, 27);
-  p.autoTable({ startY: 34, head: [head], body, headStyles: { fillColor: [30, 42, 82] }, alternateRowStyles: { fillColor: [241, 245, 251] } });
+// Bilan général pour les PDF : ce qui est gagné, déjà encaissé, reste à encaisser, mois payés / non payés
+const frDate = d => d.split('-').reverse().join('/');
+const money = n => (n ? fmtP(n) : '0,00') + ' DH';
+const payInfo = (y, m) => { const p = db.pay[payKey(y, m)]; return p && p.paid ? p : null; };
+function paySummary(y) {
+  const t = monthTotals(y), act = MOIS.map((_, m) => m).filter(m => t[m].i > 0 || payInfo(y, m));
+  const paid = act.filter(m => payInfo(y, m)), unpaid = act.filter(m => !payInfo(y, m));
+  return { paid, unpaid, enc: MOIS.reduce((a, _, m) => a + paidOf(y, m), 0), due: due(y) };
+}
+const listMois = l => l.length ? l.map(m => MOIS[m]).join(', ') : 'Aucun';
+function pdfDoc(title, period, head, body, summary) {
+  const { jsPDF } = window.jspdf, p = new jsPDF(), navy = () => p.setTextColor(30, 42, 82);
+  p.setFontSize(16); navy(); p.text(sch().name, 14, 18);
+  p.setFontSize(12); navy(); p.text(`${title} — ${period}`, 14, 27);
+  let y = 34;
+  if (summary && summary.length) {
+    p.setFontSize(11); navy(); p.text('Bilan général', 14, y + 2);
+    p.autoTable({ startY: y + 5, body: summary, theme: 'grid', styles: { fontSize: 10 }, columnStyles: { 0: { fontStyle: 'bold', cellWidth: 62, fillColor: [241, 245, 251] } } });
+    y = p.lastAutoTable.finalY + 9;
+    p.setFontSize(11); navy(); p.text('Détail', 14, y); y += 3;
+  }
+  p.autoTable({ startY: y, head: [head], body, headStyles: { fillColor: [30, 42, 82] }, alternateRowStyles: { fillColor: [241, 245, 251] } });
   return { save: name => saveBlob(p.output('blob'), name) };
 }
 function pdfMonth() {
-  const l = byMonth(Y, M), t = sum(l);
+  const l = byMonth(Y, M), t = sum(l), ps = paySummary(Y), pi = payInfo(Y, M);
   pdfDoc('Rapport mensuel', `${MOIS[M]} ${Y}`, ['Date', 'Jour', 'Heures', 'Taux', 'Revenu (DH)'],
-    [...l.map(s => [s.date, wd(s.date), fmtH(s.hours), fmt(s.rate), fmt(inc(s))]), ['Total', '', fmtH(t.h), '', fmt(t.i)]]).save(`rapport-${sl()}-${MOIS[M]}-${Y}.pdf`);
+    [...l.map(s => [s.date, wd(s.date), fmtH(s.hours), fmtP(s.rate), fmtP(inc(s))]), ['Total', '', fmtH(t.h), '', fmtP(t.i)]], [
+      ['Heures travaillées', t.h ? fmtH(t.h) + ' h' : '-'],
+      ['Jours travaillés', t.d || '-'],
+      ['Revenu du mois', money(t.i)],
+      [`Paiement de ${MOIS[M]}`, pi ? `Payé le ${frDate(pi.date)} — ${money(pi.amount)}` : t.i ? 'Non payé' : '-'],
+      ['Reste à encaisser (ce mois)', money(Math.max(0, t.i - paidOf(Y, M)))],
+      [`Reste à encaisser (année ${Y})`, money(ps.due)],
+      [`Mois payés (${Y})`, listMois(ps.paid)],
+      [`Mois non payés (${Y})`, listMois(ps.unpaid)]]).save(`rapport-${sl()}-${MOIS[M]}-${Y}.pdf`);
 }
 function pdfYear() {
-  const t = monthTotals(Y), tot = sum(mine().filter(s => yearOf(s) === Y));
-  pdfDoc('Bilan annuel', String(Y), ['Mois', 'Jours', 'Heures', 'Revenu (DH)'],
-    [...t.map((x, i) => [MOIS[i], x.d || '-', fmtH(x.h), fmt(x.i)]), ['Total', tot.d || '-', fmtH(tot.h), fmt(tot.i)]]).save(`bilan-annuel-${sl()}-${Y}.pdf`);
+  const t = monthTotals(Y), tot = sum(mine().filter(s => yearOf(s) === Y)), ps = paySummary(Y);
+  pdfDoc('Bilan annuel', String(Y), ['Mois', 'Jours', 'Heures', 'Revenu (DH)', 'Paiement'],
+    [...t.map((x, i) => { const pi = payInfo(Y, i); return [MOIS[i], x.d || '-', fmtH(x.h), fmtP(x.i), pi ? `Payé le ${frDate(pi.date)}` : x.i ? 'Non payé' : '-']; }),
+      ['Total', tot.d || '-', fmtH(tot.h), fmtP(tot.i), `Reste : ${money(ps.due)}`]], [
+      ['Revenu annuel', money(tot.i)],
+      ['Heures travaillées', tot.h ? fmtH(tot.h) + ' h' : '-'],
+      ['Jours travaillés', tot.d || '-'],
+      ['Déjà encaissé', money(ps.enc)],
+      ['Reste à encaisser', money(ps.due)],
+      ['Mois payés', listMois(ps.paid)],
+      ['Mois non payés', listMois(ps.unpaid)]]).save(`bilan-annuel-${sl()}-${Y}.pdf`);
 }
 
 /* ---------- Thème clair / sombre ---------- */
